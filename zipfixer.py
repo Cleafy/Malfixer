@@ -6,7 +6,7 @@ This module provides comprehensive analysis and recovery capabilities for
 malformed ZIP and APK files, detecting various anti-analysis techniques
 commonly used to evade security scanners.
 
-Author: Cleafy Labs
+Author: Cleafy Spa
 Version: 1.0.0
 License: MIT
 """

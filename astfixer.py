@@ -6,7 +6,7 @@ This module provides functionality to extract and decompress assets from APK fil
 with particular focus on detecting and handling obfuscated filenames and various
 compression methods used in ZIP-based archives.
 
-Author: Cleafy Labs
+Author: Cleafy Spa
 Version: 1.0.0
 License: MIT
 """

@@ -73,7 +73,7 @@ MalFixer is compatible with Python 3.8+ and tested on major platforms (Linux, ma
 
 ## 📜 License
 
-[MIT License](LICENSE)
+[MIT License](https://github.com/Cleafy/Malfixer/blob/main/LICENSE)
 
 ---
 

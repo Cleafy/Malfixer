@@ -6,7 +6,7 @@ This module provides functionality to parse and recover corrupted Android Manife
 It handles binary XML format used by Android APK files and can fix various corruption issues
 including duplicate string offsets, incorrect string counts, and malformed attribute sizes.
 
-Author: Cleafy Labs
+Author: Cleafy Spa
 Version: 1.0.0
 License: MIT
 """

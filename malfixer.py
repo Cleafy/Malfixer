@@ -6,7 +6,7 @@ A tool for inspecting, analyzing, and recovering malformed APK files.
 This tool extracts APK contents, fixes malformed assets and manifests, and reconstructs
 a clean APK file suitable for analysis.
 
-Author: Cleafy Labs
+Author: Cleafy Spa
 Version: 1.0.0
 License: MIT
 """
