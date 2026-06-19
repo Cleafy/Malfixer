@@ -6,7 +6,7 @@ This module provides comprehensive analysis and recovery capabilities for
 malformed ZIP and APK files, detecting various anti-analysis techniques
 commonly used to evade security scanners.
 
-Author: Cleafy Spa
+Author: Cleafy Labs
 Version: 1.0.0
 License: MIT
 """
@@ -22,16 +22,11 @@ from enum import Enum
 
 
 # Configure logging
-RED = "\033[91m"
-GREEN = "\033[92m"
-BLUE = "\033[94m"
-RESET = "\033[0m"
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
 
 class CompressionMethod(Enum):
     """Supported ZIP compression methods."""
@@ -43,6 +38,7 @@ class ZipSignature(Enum):
     """ZIP file format signatures."""
     LOCAL_FILE_HEADER = b'\x50\x4b\x03\x04'
     CENTRAL_DIRECTORY_HEADER = b'\x50\x4b\x01\x02'
+    DATA_DESCRIPTOR_HEADER = b'\x50\x4b\x07\x08'
 
 
 @dataclass
@@ -51,6 +47,9 @@ class FileHeader:
     position: int
     bit_flag: int
     compression_method: int
+    crc: int
+    compressed_size: int 
+    uncompressed_size: int 
     filename: str = ""
 
 
@@ -63,6 +62,7 @@ class MalformationResult:
     password_malformation_type2: Dict[str, FileHeader]
     is_multipart: bool
     has_obfuscated_filenames: bool
+    has_data_descriptor: bool
     
     @property
     def is_malformed(self) -> bool:
@@ -137,7 +137,7 @@ class ZipFixer:
         Returns:
             MalformationResult containing all detected malformations
         """
-        self.logger.info(f"{BLUE}Starting ZIP analysis{RESET}")
+        self.logger.info("Starting ZIP analysis")
         
         try:
             local_headers = self._parse_local_file_headers()
@@ -153,7 +153,8 @@ class ZipFixer:
                     local_headers, central_headers
                 ),
                 is_multipart=self._check_multipart_zip(),
-                has_obfuscated_filenames=self._check_obfuscated_filenames()
+                has_obfuscated_filenames=self._check_obfuscated_filenames(),
+                has_data_descriptor=self._check_data_desc_malformation(local_headers)
             )
             
             self._log_analysis_results(result)
@@ -179,7 +180,7 @@ class ZipFixer:
         result = self.analyze()
         
         if not result.is_malformed:
-            self.logger.info(f"{GREEN}No malformations detected - recovery not needed{RESET}")
+            self.logger.info("No malformations detected - recovery not needed")
             return "None"
         
         if output_path is None:
@@ -193,7 +194,7 @@ class ZipFixer:
             with open(output_path, 'wb') as output_file:
                 output_file.write(recovered_content)
             
-            self.logger.info(f"{GREEN}Recovery completed successfully: {output_path}{RESET}")
+            self.logger.info(f"Recovery completed successfully: {output_path}")
             return output_path
             
         except Exception as e:
@@ -331,6 +332,22 @@ class ZipFixer:
 
             return False
 
+
+    def _check_data_desc_malformation(self, headers: Dict[str, FileHeader]) -> bool:
+        """
+        Checks if the APK/ZIP contains zoroed value in the CRC, Compressed and Uncompressd size fields
+
+        :return: Boolean value indicating whether the ZIP is malformed.
+        """
+        zeroed = False 
+        for filename, header in headers.items():
+            if (header.bit_flag & (1 << 3)): #header.crc == 0 or header.compressed_size == 0 or header.uncompressed_size == 0:
+                zeroed = True
+                break
+
+        return zeroed
+
+
     def _extract_filenames_from_local_headers(self) -> List[str]:
         """
         Retrieves the filenames in the ZIP file from the Local File Headers 
@@ -381,7 +398,8 @@ class ZipFixer:
         """
         Finds the local file headers in a APK/ZIP file and extracts the corresponding compression methods.
 
-        :return: A dictionary of tuples containing the position, General Purpose Bit Flag, Compression Method and filename.
+        :return: A dictionary of tuples containing the position, General Purpose Bit Flag, Compression Method CRC, 
+        compressed size, uncompressed size and filename.
         """
 
         local_file_header_pos = 0
@@ -389,9 +407,13 @@ class ZipFixer:
 
         file_content = self.file_content
 
+        # Use Central Directory Header for possible data recovery
+        cdh = self._parse_central_directory_headers()
+
         while local_file_header_pos != -1:
             # Find the next local file header
             local_file_header_pos = file_content.find(ZipSignature.LOCAL_FILE_HEADER.value, local_file_header_pos)
+
 
             if local_file_header_pos != -1:
 
@@ -403,6 +425,18 @@ class ZipFixer:
                 compression_method_offset = local_file_header_pos + 8
                 compression_method = struct.unpack('<H', file_content[compression_method_offset:compression_method_offset + 2])[0]
 
+                # Read the CRC (4 bytes starting at offset 14 from the start of the header)
+                crc_offset = local_file_header_pos + 14
+                crc = struct.unpack('<I', file_content[crc_offset:crc_offset + 4])[0]
+                
+                # Read the Compressed Size (4 bytes starting at offset 18 from the start of the header)
+                compressed_size__offset = local_file_header_pos + 18
+                compressed_size = struct.unpack('<I', file_content[compressed_size__offset:compressed_size__offset + 4])[0]
+
+                # Read the Uncompressed Size (4 bytes starting at offset 22 from the start of the header)
+                uncompressed_size__offset = local_file_header_pos + 22
+                uncompressed_size = struct.unpack('<I', file_content[uncompressed_size__offset:uncompressed_size__offset + 4])[0]
+
                 # Read the filename length (2 bytes starting at offset 26 from the start of the header)
                 filename_length_offset = local_file_header_pos + 26
                 filename_length = struct.unpack('<H', file_content[filename_length_offset:filename_length_offset + 2])[0]
@@ -411,7 +445,7 @@ class ZipFixer:
                 extra_field_length_offset = local_file_header_pos + 28
                 extra_field_length = struct.unpack('<H', file_content[extra_field_length_offset:extra_field_length_offset + 2])[0]
 
-                # Calculate the position where the filename starts
+                # Calculate the positions where the filename starts and ends
                 filename_start = local_file_header_pos + 30
                 filename_end = filename_start + filename_length
 
@@ -422,11 +456,33 @@ class ZipFixer:
                     position=local_file_header_pos,
                     bit_flag=bit_flag,
                     compression_method=compression_method,
+                    crc=crc,
+                    compressed_size=compressed_size,
+                    uncompressed_size=uncompressed_size,
                     filename=filename
                 )
-                
-                # Move to the next header (header size + filename size + extra field size)
-                local_file_header_pos = filename_end + extra_field_length
+
+                if (bit_flag & (1 << 3)) : #crc == 0 and compressed_size == 0 and uncompressed_size == 0:
+                    # ZIP uses Data Descriptors
+
+                    # Read correct compressed size value from CDH
+                    real_compressed_size = compressed_size  # fallback to LFH value
+                    if filename in cdh:
+                        real_compressed_size = cdh[filename].compressed_size
+
+                    # Locate the Data Descriptor after file data
+                    data_desc_pos = file_content.find(ZipSignature.DATA_DESCRIPTOR_HEADER.value, filename_end + extra_field_length + real_compressed_size)
+
+                    if data_desc_pos != -1:
+                        # skip 16 bytes
+                        local_file_header_pos = data_desc_pos + 16
+                    else:
+                        # No data descriptor found; skip past this entry using compressed size
+                        local_file_header_pos = filename_end + extra_field_length + real_compressed_size
+
+                else:
+                    # Move to the next header (header size + filename size + extra field size + compressed size)
+                    local_file_header_pos = filename_end + extra_field_length + compressed_size
 
         return headers_info
 
@@ -456,6 +512,18 @@ class ZipFixer:
                 compression_method_offset = central_directory_pos + 10
                 compression_method = struct.unpack('<H', file_content[compression_method_offset:compression_method_offset + 2])[0]
 
+                # Read the CRC (4 bytes starting at offset 16 from the start of the header)
+                crc_offset = central_directory_pos + 16
+                crc = struct.unpack('<I', file_content[crc_offset:crc_offset + 4])[0]
+                
+                # Read the Compressed Size (4 bytes starting at offset 20 from the start of the header)
+                compressed_size__offset = central_directory_pos + 20
+                compressed_size = struct.unpack('<I', file_content[compressed_size__offset:compressed_size__offset + 4])[0]
+
+                # Read the Uncompressed Size (4 bytes starting at offset 24 from the start of the header)
+                uncompressed_size__offset = central_directory_pos + 24
+                uncompressed_size = struct.unpack('<I', file_content[uncompressed_size__offset:uncompressed_size__offset + 4])[0]
+
                 # Extract the filename length (2 bytes starting at offset 28 from the start of the header)
                 filename_length_offset = central_directory_pos + 28
                 filename_length = struct.unpack('<H', file_content[filename_length_offset:filename_length_offset + 2])[0]
@@ -479,6 +547,9 @@ class ZipFixer:
                     position=central_directory_pos,
                     bit_flag=bit_flag,
                     compression_method=compression_method,
+                    crc=crc,
+                    compressed_size=compressed_size,
+                    uncompressed_size=uncompressed_size,
                     filename=filename
                 )
 
@@ -491,54 +562,61 @@ class ZipFixer:
     def _log_analysis_results(self, result: MalformationResult):
         """Log the results of the analysis."""
         if result.unsupported_compression:
-            self.logger.info(f"{RED}Found {len(result.unsupported_compression)} files with unsupported compression{RESET}")
+            self.logger.warning(f"Found {len(result.unsupported_compression)} files with unsupported compression")
             for filename, header in result.unsupported_compression.items():
-                self.logger.info(f"{RED}{filename}: compression method {hex(header.compression_method)}{RESET}")
-        
+                self.logger.warning(f"  - {filename}: compression method {hex(header.compression_method)}")
+
         if result.malformed_directories:
-            self.logger.info(f"{RED}Found {len(result.malformed_directories)} malformed directories{RESET}")
+            self.logger.warning(f"Found {len(result.malformed_directories)} malformed directories")
             for directory in result.malformed_directories:
-                self.logger.info(f"{RED}-- {directory}{RESET}")
-        
+                self.logger.warning(f"  - {directory}")
+
         if result.password_malformation_type1:
-            self.logger.info(f"{RED}Found {len(result.password_malformation_type1)} files with password malformation type 1{RESET}")
-        
+            self.logger.warning(f"Found {len(result.password_malformation_type1)} files with password malformation type 1")
+
         if result.password_malformation_type2:
-            self.logger.info(f"{RED}Found {len(result.password_malformation_type2)} files with password malformation type 2{RESET}")
-        
+            self.logger.warning(f"Found {len(result.password_malformation_type2)} files with password malformation type 2")
+
         if result.is_multipart:
-            self.logger.info(f"{RED}File claims to be part of a multi-part archive{RESET}")
-        
+            self.logger.warning("File claims to be part of a multi-part archive")
+
         if result.has_obfuscated_filenames:
-            self.logger.info(f"{RED}File contains obfuscated filenames{RESET}")
-        
+            self.logger.warning("File contains obfuscated filenames")
+
+        if result.has_data_descriptor:
+            self.logger.warning("File contains zeroed header fields with data descriptor malformation")
+
         if not result.is_malformed:
-            self.logger.info(f"{GREEN}No malformations detected{RESET}")
+            self.logger.info("No malformations detected")
 
 
     def _perform_recovery(self, result: MalformationResult) -> bytes:
         """Perform the actual recovery operations."""
         content = bytearray(self.file_content)
-        
+
+        if result.has_data_descriptor:
+            content = self._fix_data_desc_malformation(content)
+            self.logger.info("Fixed data descriptor malformation")
+
         if result.unsupported_compression:
             content = self._fix_unsupported_compression(content, result.unsupported_compression)
-            self.logger.info(f"{GREEN}Fixed unsupported compression methods{RESET}")
-        
+            self.logger.info("Fixed unsupported compression methods")
+
         if result.malformed_directories:
             content = self._fix_malformed_directories(content, result.malformed_directories)
-            self.logger.info(f"{GREEN}Fixed malformed directories{RESET}")
-        
+            self.logger.info("Fixed malformed directories")
+
         if result.password_malformation_type1:
             content = self._fix_password_malformation(content, result.password_malformation_type1)
-            self.logger.info(f"{GREEN}Fixed password malformation type 1{RESET}")
-        
+            self.logger.info("Fixed password malformation type 1")
+
         if result.password_malformation_type2:
             content = self._fix_password_malformation(content, result.password_malformation_type2)
-            self.logger.info(f"{GREEN}Fixed password malformation type 2{RESET}")
-        
+            self.logger.info("Fixed password malformation type 2")
+
         if result.is_multipart:
             content = self._fix_multipart_malformation(content)
-            self.logger.info(f"{GREEN}Fixed multipart malformation{RESET}")
+            self.logger.info("Fixed multipart malformation")
         
         return bytes(content)
 
@@ -630,22 +708,55 @@ class ZipFixer:
 
     def _fix_malformed_directories(self, file_content: bytearray, mal_dirs: List[str]) -> bytearray:
         """
-        Fixes the Malformed ZIP by renaming the malicious directory names
+        Fixes the Malformed ZIP by renaming malicious directory entry names.
+
+        Only modifies filename fields inside LFH and CD headers — does NOT do a
+        global byte replacement, which would corrupt binary file data that happens
+        to contain the same byte sequence.
 
         :param file_content: The content of the file as bytes.
-        :param mal_dirs: list of malicious directories present in the ZIP file.
+        :param mal_dirs: list of malicious directory prefixes present in the ZIP.
         :return: The fixed ZIP data.
         """
 
         new_content = file_content
+
         for maldir in mal_dirs:
             newdir = maldir.replace(".", "_")
+            maldir_b = maldir.encode('ascii')
+            newdir_b = newdir.encode('ascii')
+            assert len(maldir_b) == len(newdir_b), "replacement must be same length"
 
-            maldir = maldir.encode('ascii')
-            newdir = newdir.encode('ascii')
+            # Patch LFH filename fields
+            pos = 0
+            while True:
+                pos = new_content.find(b'PK\x03\x04', pos)
+                if pos == -1:
+                    break
+                fname_len = struct.unpack_from('<H', new_content, pos + 26)[0]
+                fname_start = pos + 30
+                fname_end = fname_start + fname_len
+                fname = bytes(new_content[fname_start:fname_end])
+                patched = fname.replace(maldir_b, newdir_b)
+                if patched != fname:
+                    new_content[fname_start:fname_end] = patched
+                pos += 4
 
-            new_content = new_content.replace(maldir, newdir)
-            
+            # Patch CD filename fields
+            pos = 0
+            while True:
+                pos = new_content.find(b'PK\x01\x02', pos)
+                if pos == -1:
+                    break
+                fname_len = struct.unpack_from('<H', new_content, pos + 28)[0]
+                fname_start = pos + 46
+                fname_end = fname_start + fname_len
+                fname = bytes(new_content[fname_start:fname_end])
+                patched = fname.replace(maldir_b, newdir_b)
+                if patched != fname:
+                    new_content[fname_start:fname_end] = patched
+                pos += 4
+
         return new_content
 
 
@@ -701,6 +812,81 @@ class ZipFixer:
         eocd[6:8] = (0).to_bytes(2, 'little')  # Set total number of disks to 0
 
         return content[:-22] + eocd  
+
+    def _fix_data_desc_malformation(        
+        self, 
+        content: bytearray, 
+    ) -> bytearray:
+        """
+        Fixes the Malformed ZIP by copying correct input values in the LFH from the CDH
+
+        :param content: The content of the file as bytes.
+        :return: The fixed ZIP data.
+        """    
+        central_dir_headers = self._parse_central_directory_headers()
+
+        local_file_header_pos = 0
+
+        file_content = content
+
+        while local_file_header_pos != -1:
+            # Find the next local file header
+            local_file_header_pos = file_content.find(ZipSignature.LOCAL_FILE_HEADER.value, local_file_header_pos)
+
+            if local_file_header_pos != -1:
+
+                # Find the filename to use it as a key in the CDH
+
+                # Read the filename length (2 bytes starting at offset 26 from the start of the header)
+                filename_length_offset = local_file_header_pos + 26
+                filename_length = struct.unpack('<H', file_content[filename_length_offset:filename_length_offset + 2])[0]
+
+                # Calculate the position where the filename starts
+                filename_start = local_file_header_pos + 30
+                filename_end = filename_start + filename_length
+
+                # Extract the filename
+                filename = file_content[filename_start:filename_end].decode('utf-8', errors='replace')
+
+                # Extract the General Purpose Bit Flag (2 bytes starting at offset 6 from the start of the header)
+                bit_flag_offset = local_file_header_pos + 6
+                bit_flag = struct.unpack('<H', file_content[bit_flag_offset:bit_flag_offset + 2])[0]
+
+                # Read the extra field length (2 bytes starting at offset 28 from the start of the header)
+                extra_field_length_offset = local_file_header_pos + 28
+                extra_field_length = struct.unpack('<H', file_content[extra_field_length_offset:extra_field_length_offset + 2])[0]
+
+                if (bit_flag & (1 << 3)): 
+
+                    # Data Descriptor used
+                    # Fix with correct values
+
+                    # Write the CRC
+                    crc_offset = local_file_header_pos + 14
+                    file_content[crc_offset:crc_offset + 4] = struct.pack('<I', central_dir_headers[filename].crc)
+
+                    # Write the Compressed Size
+                    compressed_size_offset = local_file_header_pos + 18
+                    file_content[compressed_size_offset:compressed_size_offset + 4] = struct.pack('<I', central_dir_headers[filename].compressed_size)
+
+                    # Write the Uncompressed Size
+                    uncompressed_size_offset = local_file_header_pos + 22
+                    file_content[uncompressed_size_offset:uncompressed_size_offset + 4] = struct.pack('<I', central_dir_headers[filename].uncompressed_size)
+
+                    # Move to the next header (header size + filename size + extra field size)
+                    #Find Data Descriptor field and skip it (16 bytes)
+                    data_desc_pos = file_content.find(ZipSignature.DATA_DESCRIPTOR_HEADER.value, filename_end + extra_field_length + central_dir_headers[filename].compressed_size)
+
+                    if data_desc_pos != -1:
+                        local_file_header_pos = data_desc_pos + 16
+                    else:
+                        local_file_header_pos = filename_end + extra_field_length + central_dir_headers[filename].compressed_size
+                
+                else:
+                    # No data descriptor used
+                    local_file_header_pos = filename_end + extra_field_length + central_dir_headers[filename].compressed_size
+        
+        return file_content
 
 
 class ZipFixerCLI:

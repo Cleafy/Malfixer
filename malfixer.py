@@ -6,7 +6,7 @@ A tool for inspecting, analyzing, and recovering malformed APK files.
 This tool extracts APK contents, fixes malformed assets and manifests, and reconstructs
 a clean APK file suitable for analysis.
 
-Author: Cleafy Spa
+Author: Cleafy Labs
 Version: 1.0.0
 License: MIT
 """
@@ -27,6 +27,8 @@ try:
     from zipfixer import ZipFixer
     from manfixer import AndroidManifestParser
     from astfixer import APKAssetExtractor
+    from apksigner import APKSigner
+    from arscfixer import ArscFixer
 except ImportError as e:
     logging.error(f"Required module not found: {e}")
     sys.exit(1)
@@ -102,9 +104,17 @@ class Malfixer:
             if mal_assets:
                 astfixer.decompress_and_save_files(mal_assets, str(self.temp_dir) + "/recovered_assets/")
 
-            # Unzip APK contents to the temporary directory
+            # Unzip APK contents to the temporary directory.
+            # Also record each entry's original compress_type so the re-zip can
+            # preserve it instead of blindly re-deflating everything.
+            _MAX_PATH = 512  # guard against deeply-nested paths causing RecursionError in os.makedirs
+            original_compress: dict = {}
             with zipfile.ZipFile(output_apk, 'r') as zip_ref:
                 for file_info in zip_ref.infolist():
+                    original_compress[file_info.filename] = file_info.compress_type
+                    if len(file_info.filename) > _MAX_PATH:
+                        self.logger.warning(f"Skipping {file_info.filename[:80]}... (path too long)")
+                        continue
                     try:
                         zip_ref.extract(file_info, path=str(self.temp_dir))
                     except zipfile.BadZipFile as e:
@@ -112,7 +122,7 @@ class Malfixer:
                     except Exception as e:
                         self.logger.warning(f"Skipping file {file_info.filename} due to error: {e}")
             self.logger.debug("APK content extracted.")
-            
+
 
             # Replace the AndroidManifest.xml file
             manifest_path = self.temp_dir / "AndroidManifest.xml"
@@ -123,16 +133,53 @@ class Malfixer:
 
             if manresult:
                 shutil.move(self.temp_dir / "fixed.xml", manifest_path)
-
                 self.logger.debug("AndroidManifest.xml replaced.")
 
-            if zipresult != "None" or mal_assets or manresult:
-                # Re-zip the contents into a new APK file
-                with zipfile.ZipFile(output_apk, 'w', zipfile.ZIP_DEFLATED) as new_apk: 
+            # Check and fix resources.arsc
+            arscresult = False
+            arsc_path = self.temp_dir / "resources.arsc"
+            if arsc_path.exists():
+                arsc_data = arsc_path.read_bytes()
+                arsc_parser = ArscFixer(arsc_data, self.logger)
+                parse_result = arsc_parser.parse()
+                if not parse_result.valid:
+                    fixed_data, fixes = arsc_parser.fix()
+                    if fixes:
+                        arsc_path.write_bytes(fixed_data)
+                        arscresult = True
+                        self.logger.debug(
+                            f"resources.arsc: {len(fixes)} fix(es) applied "
+                            f"({parse_result.error_count} errors resolved)."
+                        )
+                    else:
+                        self.logger.warning(
+                            "resources.arsc: malformed but no automatic fix available."
+                        )
+                else:
+                    self.logger.debug("resources.arsc: no malformation detected.")
+
+            if zipresult != "None" or mal_assets or manresult or arscresult:
+                # Re-zip the contents into a new APK file.
+                #
+                # Compression rules:
+                #   MUST_STORE  — Android memory-maps these at runtime; they must be
+                #                 uncompressed inside the ZIP.
+                #   *.so        — native libs are mmap-executed directly from the APK on
+                #                 Android 6+ (extractNativeLibs=false); must be STORED.
+                #   everything else — preserve the compression the entry had in the
+                #                 original APK (recorded above).  This avoids re-deflating
+                #                 already-compressed media (png/jpg/mp3/…) which would
+                #                 waste CPU and could increase file size.
+                _MUST_STORE = {"resources.arsc", "AndroidManifest.xml"}
+                with zipfile.ZipFile(output_apk, 'w', zipfile.ZIP_DEFLATED) as new_apk:
                     for file_path in self.temp_dir.rglob('*'):
                         if file_path.is_file():
-                            arcname = file_path.relative_to(self.temp_dir)
-                            new_apk.write(str(file_path), str(arcname))
+                            arcname = str(file_path.relative_to(self.temp_dir))
+                            if arcname in _MUST_STORE or arcname.endswith(".so"):
+                                compress = zipfile.ZIP_STORED
+                            else:
+                                compress = original_compress.get(arcname, zipfile.ZIP_DEFLATED)
+                            new_apk.write(str(file_path), arcname, compress_type=compress)
                 self.logger.debug(f"New APK created: {output_apk}")
             
             
@@ -150,7 +197,12 @@ class Malfixer:
         finally:
             # Clean up temporary directory
             self._cleanup_temp_directory()
-        
+
+    def resign_apk(self, apk_path):
+        print("Resigned")
+        pass
+        return apk_path
+
 
 def main():
     """Main entry point for the APK Inspector tool."""
@@ -179,6 +231,12 @@ def main():
     )
     
     parser.add_argument(
+        "--resign",
+        help="Resign and re-align the APK. WARNING: This operation replaces the APK's original certificate with a new one.",
+        action="store_true"
+    )
+
+    parser.add_argument(
         "--log-level", "-l",
         default="ERROR",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -206,18 +264,25 @@ def main():
     try:
         malfixer = Malfixer(args.apk_path, logger, args.output_dir)
         output_apk = malfixer.inspect_and_recover()
+
+        if args.resign:
+            logger = logging.getLogger(__name__)
+            signer = APKSigner(logger)
+            output_apk = signer.sign(output_apk)
+        
         if output_apk != "None":
-            print(f"\n✅ Success! Fixed APK created: {output_apk}")
+            print(f"\nSuccess! Fixed APK created: {output_apk}")
         else:
-            print(f"\n✅ No malfrmation detected. Recovery is not needed.")
+            print(f"\nNo malfrmation detected. Recovery is not needed.")
+
     except MalfixerError as e:
-        print(f"\n❌ Error: {e}", file=sys.stderr)
+        print(f"\nError: {e}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
-        print("\n⚠️  Operation cancelled by user", file=sys.stderr)
+        print("\nOperation cancelled by user", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        print(f"\n💥 Unexpected error: {e}", file=sys.stderr)
+        print(f"\nUnexpected error: {e}", file=sys.stderr)
         traceback.print_exc() 
         sys.exit(1)
 

@@ -22,10 +22,6 @@ from dataclasses import dataclass
 from enum import Enum
 
 # Configure logging
-RED = "\033[91m"
-GREEN = "\033[92m"
-BLUE = "\033[94m"
-RESET = "\033[0m"
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -78,7 +74,7 @@ class APKAssetExtractor:
         else:
             self.logger = logger
 
-        self.logger.info(f"{BLUE}Initialized assets extractor for: {self.apk_path}{RESET}")
+        self.logger.info(f"Initialized assets extractor: {self.apk_path}")
 
 
     def _contains_non_ascii(self, s: str) -> bool:
@@ -143,7 +139,7 @@ class APKAssetExtractor:
                 
                 # Check for the presence of obfuscated filenames 
                 if self._contains_non_ascii(file_name):
-                    self.logger.info(f"{RED}Non-ASCII characters detected in filename {file_name}{RESET}")
+                    self.logger.warning(f"Non-ASCII characters detected in filename: {file_name}")
                 
                     # Skip the file if it not under the specified directory
                     if not file_name.startswith(directory):
@@ -202,7 +198,7 @@ class APKAssetExtractor:
 
             with open(output_path, "wb") as f:
                 f.write(decompressed_data)
-            self.logger.info(f"{GREEN}File successfully extracted: {output_path}{RESET}")
+            self.logger.info(f"File successfully extracted: {output_path}")
 
 
 if __name__ == "__main__":

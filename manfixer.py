@@ -19,12 +19,9 @@ from dataclasses import dataclass
 from enum import IntEnum
 
 # Configure logging
-RED = "\033[91m"
-BLUE = "\033[94m"
-RESET = "\033[0m"
 logging.basicConfig(
     level=logging.INFO,
-    format='%(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -142,7 +139,7 @@ class AndroidManifestParser:
         header["size"] = size
 
         if type != 3:
-            self.logger.info(f"{RED}First byte of the file is not 0x03 (RES_XML_TYPE){RESET}")
+            self.logger.warning("First byte of the file is not 0x03 (RES_XML_TYPE)")
             self.corruption_flag = True
             header["type"] = 3
 
@@ -159,7 +156,7 @@ class AndroidManifestParser:
             f.read(1) # Skip one byte
             res = self.read_uint32(f)
 
-        self.logger.info(f"Parsed RES {hex(res)} at offset {f.tell() - 4}")
+        self.logger.debug(f"Parsed RES {hex(res)} at offset {f.tell() - 4}")
 
         headerSize = (res >> 16) & 0xFFFF
         type = res & 0xFFFF
@@ -230,13 +227,13 @@ class AndroidManifestParser:
         for i in range(stringCount):
             stringoffset = self.read_uint32(f)
             if stringoffset >= file_size or (i!=0 and stringoffset <= 0):
-                self.logger.info(f"{RED}The file contains a wrong value for the stringCount header field: {str(stringCount)} instead of {str(i)}{RESET}")
+                self.logger.warning(f"The file contains a wrong value for the stringCount header field: {str(stringCount)} instead of {str(i)}")
                 self.corruption_flag = True
                 f.seek(-4, 1) 
                 self.strPool_broken_flag = 1
                 break
             elif stringoffset in strPool["stringoffsets"]:
-                self.logger.info(f"{RED}The file contains duplicate values for the string offset: {str(stringoffset)}{RESET}")
+                self.logger.warning(f"The file contains duplicate values for the string offset: {str(stringoffset)}")
                 self.corruption_flag = True
                 self.strPool_broken_flag = 2
                 self.duplicate_offsets.append(i)
@@ -373,7 +370,7 @@ class AndroidManifestParser:
 
             if res == ResourceHeader.RES_XML_START_ELEMENT_TYPE.value:   
 
-                logger.info(f"Parsed RES {hex(res)} at offset {f.tell()-16}")
+                self.logger.debug(f"Parsed RES {hex(res)} at offset {f.tell()-16}")
 
                 element["attrExt_ns_index"] = self.read_uint32(f)
                 element["attrExt_name_index"] = self.read_uint32(f)
@@ -389,7 +386,7 @@ class AndroidManifestParser:
                 element["attributeStart"] = self.read_uint16(f)
                 wrong_start = 0
                 if(element["attributeStart"] != 0x14):
-                    self.logger.info(f"{RED}The file contains wrong values for the attributeStart fields: {str(hex(element["attributeStart"]))} instead of 0x14{RESET}")
+                    self.logger.warning(f"The file contains wrong values for the attributeStart fields: {str(hex(element['attributeStart']))} instead of 0x14")
                     self.corruption_flag = True
                     wrong_start = element["attributeStart"]
                     element["attributeStart"] = 0x14
@@ -402,7 +399,7 @@ class AndroidManifestParser:
 
                 wrong_size = 0
                 if(element["attributeSize"] != 0x14):
-                    self.logger.info(f"{RED}The file contains wrong values for the attributeSize fields: {str(hex(element["attributeSize"]))} instead of 0x14{RESET}")
+                    self.logger.warning(f"The file contains wrong values for the attributeSize fields: {str(hex(element['attributeSize']))} instead of 0x14")
                     self.corruption_flag = True
                     wrong_size = element["attributeSize"]
                     element["attributeSize"] = 0x14
@@ -435,7 +432,7 @@ class AndroidManifestParser:
                                 attrib["attrib_rawValue"] -= len(self.duplicate_offsets)
                     
                     if (attrib["attrib_rawValue"] < 0 or attrib["attrib_rawValue"] >= xmlDict["strPool"]["stringCount"]) and attrib["attrib_rawValue"] != 4294967295:
-                        self.logger.info(f"{RED}The file contains a wrong value for the attribute raw value index: {str(attrib["attrib_rawValue"])}{RESET}")
+                        self.logger.warning(f"The file contains a wrong value for the attribute raw value index: {str(attrib['attrib_rawValue'])}")
                         self.corruption_flag = True
                         attrib["attrib_rawValue"] = 0
 
@@ -451,7 +448,7 @@ class AndroidManifestParser:
                                 attrib["attrib_typedValue_data"] -= len(self.duplicate_offsets)
                     
                     if attrib["attrib_typedValue_dataType"] == b'\x03' and (attrib["attrib_typedValue_data"] < 0 or (attrib["attrib_typedValue_data"] >= xmlDict["strPool"]["stringCount"] and attrib["attrib_typedValue_data"] != 4294967295)):
-                        self.logger.info(f"{RED}The file contains a wrong value for the attribute typed value data: {str(attrib["attrib_typedValue_data"])}{RESET}")
+                        self.logger.warning(f"The file contains a wrong value for the attribute typed value data: {str(attrib['attrib_typedValue_data'])}")
                         self.corruption_flag = True
                         attrib["attrib_typedValue_data"] = 0
 
@@ -470,7 +467,7 @@ class AndroidManifestParser:
 
             elif res == ResourceHeader.RES_XML_END_ELEMENT_TYPE.value: 
 
-                logger.info(f"Parsed RES {hex(res)} at offset {f.tell()}")
+                self.logger.debug(f"Parsed RES {hex(res)} at offset {f.tell()}")
 
                 element["endEleExt_ns_index"] = self.read_uint32(f)
                 element["endEleExt_name_index"] = self.read_uint32(f)
@@ -490,7 +487,7 @@ class AndroidManifestParser:
 
             elif res == ResourceHeader.RES_XML_END_NAMESPACE_TYPE.value: 
 
-                logger.info(f"Parsed RES {hex(res)} at offset {f.tell()}")
+                self.logger.debug(f"Parsed RES {hex(res)} at offset {f.tell()}")
 
                 element["ext_prefix_index"] = self.read_uint32(f)
                 element["ext_uri_index"] = self.read_uint32(f)
@@ -506,7 +503,7 @@ class AndroidManifestParser:
                 endNs = element
                 break
             else:
-                logger.info(f"Parsed Unknown RES {hex(res)} at offset {f.tell()}")
+                self.logger.debug(f"Parsed unknown RES {hex(res)} at offset {f.tell()}")
 
         return element_list, endNs
 
@@ -551,7 +548,7 @@ class AndroidManifestParser:
 
                             strlen = len(strdata2)-1 
                             if strlen > STRLEN_THRESHOLD:
-                                self.logger.info(f"{RED}StrPool contains strings that exceeds max length: {str(strlen)}{RESET}")
+                                self.logger.warning(f"StrPool contains strings that exceed max length: {str(strlen)}")
                                 self.corruption_flag = True
                                 self.write_uint16(output_stream, 0)
                                 strdata = b'\x00\x00' + strdata[2:]
@@ -667,7 +664,7 @@ class AndroidManifestParser:
             manifest_file_path: Path to the manifest file            
         """
 
-        self.logger.info(f"{BLUE}Starting Android Manifest analysis{RESET}")
+        self.logger.info("Starting Android Manifest analysis")
 
         with open(manifest_file_path, 'rb') as input_stream:
             xmlDict = self._parse_xml_document(input_stream)
