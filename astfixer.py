@@ -48,7 +48,7 @@ class APKAssetExtractor:
     # Minimum size for a valid local file header
     MIN_HEADER_SIZE = 30
     
-    def __init__(self, apk_path: Union[str, Path], main_logger: Optional[logging] = None):
+    def __init__(self, apk_path: Union[str, Path], main_logger: Optional[logging.Logger] = None):
         """
         Initialize the extractor with an APK file path.
         

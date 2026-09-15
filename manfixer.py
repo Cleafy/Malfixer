@@ -56,7 +56,7 @@ class AndroidManifestParser:
     by fixing common corruption patterns.
     """
 
-    def __init__(self, output_dir: str = "temp_apk_content", main_logger: Optional[logging] = None):
+    def __init__(self, output_dir: str = "temp_apk_content", main_logger: Optional[logging.Logger] = None):
         """
         Initialize the parser.
         

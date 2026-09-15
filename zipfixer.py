@@ -91,7 +91,7 @@ class ZipFixer:
         b"resources.arsc/"
     ]
     
-    def __init__(self, file_path: str, main_logger: Optional[logging] = None):
+    def __init__(self, file_path: str, main_logger: Optional[logging.Logger] = None):
         """
         Initialize the analyzer with a file path.
         

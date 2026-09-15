@@ -12,6 +12,7 @@ MalFixer inspects the APK structure, repairs corrupted ZIP entries, decodes and 
 - 🧾 **Manifest Recovery**: Decodes and reconstructs broken or corrupted `AndroidManifest.xml` files (via `manfixer.py`)
 - 📁 **Asset Sanitisation**: Identifies and recovers assets with malformed filenames (via `astfixer.py`)
 - 🗂️ **Resource Table Repair**: Parses and repairs corrupted `resources.arsc` files, fixing bad chunk headers, invalid string pool offsets, and malformed entry data (via `arscfixer.py`)
+- 🧬 **DEX Bytecode Repair**: Detects and corrects malformed `fill-array-data-payload` (`.array-data`) blocks in `classes*.dex` files, restoring a spec-compliant `element_width` (via `dexfixer.py`)
 - 🔄 **APK Repackaging**: Rebuilds a clean APK compatible with popular tools like JADX.
 - ✍️ **APK Re-signing**: Optionally re-signs the recovered APK using a freshly generated RSA key pair and APK Signature Scheme v2, producing an installable artifact (via `apksigner.py`)
 
@@ -26,6 +27,7 @@ malfixer/
 ├── manfixer.py    # Repairs malformed AndroidManifest.xml files
 ├── astfixer.py    # Recovers corrupted or obfuscated assets
 ├── arscfixer.py   # Parses and repairs corrupted resources.arsc files
+├── dexfixer.py    # Repairs malformed .array-data blocks in classes*.dex files
 ├── apksigner.py   # Re-signs the recovered APK (pure-Python, no external tools)
 ```
 

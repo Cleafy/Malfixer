@@ -29,6 +29,7 @@ try:
     from astfixer import APKAssetExtractor
     from apksigner import APKSigner
     from arscfixer import ArscFixer
+    from dexfixer import DexFixer
 except ImportError as e:
     logging.error(f"Required module not found: {e}")
     sys.exit(1)
@@ -158,7 +159,30 @@ class Malfixer:
                 else:
                     self.logger.debug("resources.arsc: no malformation detected.")
 
-            if zipresult != "None" or mal_assets or manresult or arscresult:
+            # Check and fix every classes*.dex (multidex-aware: classes.dex,
+            # classes2.dex, classes3.dex, ... are all inspected independently).
+            dexresult = False
+            for dex_path in sorted(self.temp_dir.glob("classes*.dex")):
+                dex_data = dex_path.read_bytes()
+                dex_parser = DexFixer(dex_data, self.logger)
+                parse_result = dex_parser.parse()
+                if not parse_result.valid:
+                    fixed_data, fixes = dex_parser.fix()
+                    if fixes:
+                        dex_path.write_bytes(fixed_data)
+                        dexresult = True
+                        self.logger.debug(
+                            f"{dex_path.name}: {len(fixes)} fix(es) applied "
+                            f"({parse_result.error_count} errors resolved)."
+                        )
+                    else:
+                        self.logger.warning(
+                            f"{dex_path.name}: malformed but no automatic fix available."
+                        )
+                else:
+                    self.logger.debug(f"{dex_path.name}: no malformation detected.")
+
+            if zipresult != "None" or mal_assets or manresult or arscresult or dexresult:
                 # Re-zip the contents into a new APK file.
                 #
                 # Compression rules:
